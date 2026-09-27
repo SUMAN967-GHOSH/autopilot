@@ -1,9 +1,9 @@
+import "dotenv/config";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
-import dotenv from "dotenv";
 
 import authRoutes from "./routes/auth";
 import rulesRoutes from "./routes/rules";
@@ -14,8 +14,9 @@ import accountRoutes from "./routes/account";
 import autopilotRoutes from "./routes/autopilot";
 import vaultRoutes from "./routes/vault";
 import { startEngine } from "./engine/index";
+import { validateEnv } from "./config/env";
 
-dotenv.config();
+validateEnv();
 
 const server = Fastify({
   logger: true,
@@ -38,7 +39,7 @@ server.register(cors, {
 });
 
 server.register(jwt, {
-  secret: process.env.JWT_SECRET || "super-secret-key-for-dev",
+  secret: process.env.JWT_SECRET!,
   cookie: {
     cookieName: "session",
     signed: false,

@@ -58,7 +58,7 @@ export default async function autopilotRoutes(server: FastifyInstance) {
 
   // Monitor endpoint (called by worker, uses secret)
   server.post("/monitor", async (request, reply) => {
-    const ENGINE_SECRET = process.env.ENGINE_SECRET ?? process.env.JWT_SECRET ?? "dev-engine-secret";
+    const ENGINE_SECRET = process.env.ENGINE_SECRET ?? process.env.JWT_SECRET!;
     const authHeader = request.headers["x-engine-secret"];
     
     if (authHeader !== ENGINE_SECRET) {
