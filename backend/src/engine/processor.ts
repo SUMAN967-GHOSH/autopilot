@@ -151,14 +151,22 @@ export async function processPaymentDirect(data: PaymentJobData): Promise<any> {
     console.log(`[Processor] 🔍 Rule "${rule.trigger}" | matches: ${triggerMatches}`);
     if (!triggerMatches) continue;
 
-    const execAmount = (rule.isPercentage as boolean)
-      ? (parseFloat(rule.amount) / 100) * paymentAmount
-      : parseFloat(rule.amount);
+    const paymentStroops = Math.round(paymentAmount * 10000000);
+    const ruleAmountFloat = parseFloat(rule.amount);
+
+    let execStroops: number;
+    if (rule.isPercentage) {
+      execStroops = Math.round((paymentStroops * ruleAmountFloat) / 100);
+    } else {
+      execStroops = Math.round(ruleAmountFloat * 10000000);
+    }
+
+    const execAmount = execStroops / 10000000;
 
     console.log(`[Processor] 💰 Exec: ${execAmount} ${assetCode} (${rule.isPercentage ? `${rule.amount}%` : "flat"} of ${paymentAmount})`);
 
-    if (execAmount <= 0.0000001) { console.log("[Processor] ⚠ Amount too small — skipping"); continue; }
-    if (execAmount > paymentAmount) {
+    if (execStroops <= 0) { console.log("[Processor] ⚠ Amount too small — skipping"); continue; }
+    if (execStroops > paymentStroops) {
       console.log(`[Processor] ⚠ Rule amount ${execAmount} > payment ${paymentAmount} — skipping`);
       continue;
     }
