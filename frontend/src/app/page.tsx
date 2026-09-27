@@ -13,10 +13,13 @@ import {
   Clock,
   Sparkles,
   ChevronRight,
+  Copy,
+  Check,
+  ExternalLink,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { horizonAccountUrl } from "@/lib/network";
+import { horizonAccountUrl, IS_TESTNET, NETWORK_LABEL } from "@/lib/network";
 
 // ── Metric Tile ─────────────────────────────────────────────────────────────
 function MetricTile({
@@ -96,22 +99,24 @@ function ActivityItem({
   );
 }
 
-function EmptyActivity() {
+function EmptyActivity({ hasActiveRules }: { hasActiveRules: boolean }) {
   return (
     <div className="py-10 text-center">
       <div className="w-10 h-10 rounded-2xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mx-auto mb-4">
         <Activity className="w-5 h-5 text-white/20" />
       </div>
-      <p className="text-sm text-white/30 font-medium">No activity yet</p>
-      <p className="text-xs text-white/20 mt-1">
-        Create your first automation rule to see activity here
+      <p className="text-sm text-white/40 font-medium">No automated transactions yet</p>
+      <p className="text-xs text-white/25 mt-1 max-w-sm mx-auto leading-relaxed">
+        {hasActiveRules
+          ? "Your saves and investments will appear here after an incoming payment matches a rule."
+          : "Create a rule, then send a payment to your wallet to see AutoPilot work."}
       </p>
       <Link
-        href="/chat"
+        href={hasActiveRules ? "/rules" : "/chat"}
         className="mt-4 flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors font-medium justify-center"
       >
-        <Sparkles className="w-3.5 h-3.5" />
-        Create a rule
+        {hasActiveRules ? <Zap className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
+        {hasActiveRules ? "Review active rules" : "Create your first rule"}
       </Link>
     </div>
   );
@@ -128,6 +133,14 @@ export default function DashboardPage() {
   const [isUnfunded, setIsUnfunded] = useState(false);
   const [txRows, setTxRows] = useState<any[]>([]);
   const [activeRules, setActiveRules] = useState(0);
+  const [copiedAddress, setCopiedAddress] = useState(false);
+
+  const copyAddress = async () => {
+    if (!publicKey) return;
+    await navigator.clipboard.writeText(publicKey);
+    setCopiedAddress(true);
+    setTimeout(() => setCopiedAddress(false), 2000);
+  };
 
   useEffect(() => {
     async function loadDashboard() {
@@ -287,7 +300,7 @@ export default function DashboardPage() {
                   </span>
                 )}
                 <span className="text-xs text-blue-400/80 bg-blue-400/10 border border-blue-400/20 px-2.5 py-1 rounded-full font-medium whitespace-nowrap">
-                  ✦ Stellar Testnet
+                  ✦ Stellar {NETWORK_LABEL}
                 </span>
               </div>
             </div>
@@ -318,6 +331,41 @@ export default function DashboardPage() {
             </p>
           </div>
         </div>
+
+        {isUnfunded && publicKey && (
+          <div className="mb-6 rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] p-5 flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="w-10 h-10 rounded-xl bg-amber-400/10 border border-amber-400/20 flex items-center justify-center shrink-0">
+              <Shield className="w-5 h-5 text-amber-300" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-white">Fund your wallet to get started</p>
+              <p className="text-xs text-white/40 mt-1 leading-relaxed">
+                {IS_TESTNET
+                  ? "Your Stellar testnet account does not exist on-chain yet. Add test XLM before creating and running automations."
+                  : "Send XLM to this address to activate the account before running automations."}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                onClick={copyAddress}
+                className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-xs text-white/60 transition-colors"
+              >
+                {copiedAddress ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedAddress ? "Copied" : "Copy address"}
+              </button>
+              {IS_TESTNET && (
+                <a
+                  href={`https://friendbot.stellar.org/?addr=${encodeURIComponent(publicKey)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-amber-400 text-black text-xs font-semibold hover:bg-amber-300 transition-colors"
+                >
+                  Fund with Friendbot <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Metrics */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -356,7 +404,7 @@ export default function DashboardPage() {
 
           <div className="px-4 md:px-6">
             {txRows.length === 0 ? (
-              <EmptyActivity />
+              <EmptyActivity hasActiveRules={activeRules > 0} />
             ) : (
               txRows.map((tx: any) => (
                 <ActivityItem key={tx.id} type={tx.type} memo={tx.memo} amount={tx.amount} createdAt={tx.createdAt} asset={tx.asset ?? "XLM"} />

@@ -449,11 +449,20 @@ export default function GoalsClient({
           </div>
           <p className="text-sm font-semibold text-white/50">No goals yet</p>
           <p className="text-xs text-white/25 mt-1.5 max-w-xs">
-            Set a savings target and link it to an AutoPilot rule to track your progress.
+            Set a target, choose XLM or USDC, and link a rule so every automated transfer updates your progress.
           </p>
+          <div className="mt-5 w-full max-w-sm rounded-xl bg-gradient-to-r from-blue-500/[0.06] to-purple-500/[0.06] border border-white/[0.07] px-4 py-3 text-left">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium text-white/55">Example: Emergency fund</p>
+                <p className="text-[11px] text-white/25 mt-0.5">1,000 XLM target · linked to a 10% savings rule</p>
+              </div>
+              <TrendingUp className="w-4 h-4 text-blue-400/60 shrink-0" />
+            </div>
+          </div>
           <button
             onClick={() => setShowNew(true)}
-            className="mt-5 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-all"
+            className="mt-6 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-all"
           >
             <Plus className="w-4 h-4" />
             Create first goal
