@@ -14,6 +14,8 @@ pub enum DataKey {
     Owner,
     Engine,
     IsInitialized,
+    Paused,
+    SpendLimit,
 }
 
 #[contractimpl]
@@ -25,6 +27,7 @@ impl AutopilotVault {
         }
         env.storage().instance().set(&DataKey::Owner, &owner);
         env.storage().instance().set(&DataKey::Engine, &engine);
+        env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::IsInitialized, &true);
 
         env.storage()
@@ -52,8 +55,52 @@ impl AutopilotVault {
         env.storage().instance().get(&DataKey::Engine).unwrap()
     }
 
+    /// Pause the contract (Emergency Stop)
+    pub fn pause(env: Env) {
+        let owner = Self::get_owner(env.clone());
+        owner.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &true);
+    }
+
+    /// Unpause the contract
+    pub fn unpause(env: Env) {
+        let owner = Self::get_owner(env.clone());
+        owner.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &false);
+    }
+
+    /// Update the engine address (Key Rotation)
+    pub fn update_engine(env: Env, new_engine: Address) {
+        let owner = Self::get_owner(env.clone());
+        owner.require_auth();
+        env.storage().instance().set(&DataKey::Engine, &new_engine);
+    }
+
+    /// Set maximum on-chain spend limit per execution
+    pub fn set_spend_limit(env: Env, limit: i128) {
+        let owner = Self::get_owner(env.clone());
+        owner.require_auth();
+        env.storage().instance().set(&DataKey::SpendLimit, &limit);
+    }
+
+    /// Upgrade the contract WASM
+    pub fn upgrade(env: Env, new_wasm_hash: soroban_sdk::BytesN<32>) {
+        let owner = Self::get_owner(env.clone());
+        owner.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
+    /// Check if contract is paused
+    fn check_not_paused(env: &Env) {
+        let is_paused: bool = env.storage().instance().get(&DataKey::Paused).unwrap_or(false);
+        if is_paused {
+            panic!("Contract is paused");
+        }
+    }
+
     /// Withdraw funds - only the owner can withdraw
     pub fn withdraw(env: Env, amount: i128, token_address: Address) {
+        Self::check_not_paused(&env);
         env.storage()
             .instance()
             .extend_ttl(DAY_IN_LEDGERS, THIRTY_DAYS_IN_LEDGERS);
@@ -76,11 +123,19 @@ impl AutopilotVault {
 
     /// Engine execute - allow engine to execute rule-based withdrawals
     pub fn engine_execute(env: Env, amount: i128, token_address: Address) {
+        Self::check_not_paused(&env);
         env.storage()
             .instance()
             .extend_ttl(DAY_IN_LEDGERS, THIRTY_DAYS_IN_LEDGERS);
         let engine: Address = env.storage().instance().get(&DataKey::Engine).unwrap();
         engine.require_auth();
+
+        // Check spend limits
+        if let Some(limit) = env.storage().instance().get::<_, i128>(&DataKey::SpendLimit) {
+            if amount > limit {
+                panic!("Amount exceeds spend limit");
+            }
+        }
 
         let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
 
