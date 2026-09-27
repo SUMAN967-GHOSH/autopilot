@@ -12,6 +12,8 @@ import { calcGoalEta, fmtXlm, type EtaResult, type TxRow } from "@/lib/insights"
 interface Goal {
   id: string;
   name: string;
+  /** Currency the target and progress are denominated in. */
+  asset?: "XLM" | "USDC";
   targetAmount: number;
   currentAmount: number;
   emoji: string;
@@ -21,6 +23,8 @@ interface Goal {
 
 interface Rule {
   id: string;
+  trigger?: string | null;
+  memo?: string | null;
   description: string | null;
   action: string;
   amount: number;
@@ -29,12 +33,20 @@ interface Rule {
 }
 
 /**
- * ETA for a goal, measured from the linked rule's own transaction history.
- *
- * Falls back to a documented estimate (and labels it "est.") only when the
- * rule has no history to measure.
+ * Infer a rule's asset from its text — mirrors ruleAsset() in the backend
+ * (backend/src/engine/processor.ts). The Rule table stores the asset inside the
+ * trigger phrase rather than a column, so both sides read it the same way.
  */
-function goalEta(goal: Goal, rules: Rule[], transactions: TxRow[]): EtaResult {
+function ruleAssetOf(rule: Rule): "XLM" | "USDC" {
+  const text = [rule.trigger, rule.action, rule.memo, rule.description]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return text.includes("usdc") && !text.includes("xlm") ? "USDC" : "XLM";
+}
+
+// ── AI ETA calc ───────────────────────────────────────────────────────────────
+function calcETA(goal: Goal, rules: Rule[]): string {
   const remaining = (goal.targetAmount ?? 0) - (goal.currentAmount ?? 0);
   const linked = rules.find(r => r.id === goal.linkedRuleId) ?? null;
 
@@ -86,7 +98,9 @@ function GoalCard({
   const cur = goal.currentAmount ?? 0;
   const tgt = goal.targetAmount ?? 1;
   const pct = Math.min(Math.round((cur / tgt) * 100), 100);
-  const eta = goalEta(goal, rules, transactions);
+  // Goals created before asset tracking are XLM.
+  const goalAsset = goal.asset ?? "XLM";
+  const eta = calcETA(goal, rules);
   const linked = rules.find(r => r.id === goal.linkedRuleId);
   const isDone = pct >= 100;
 
@@ -122,7 +136,7 @@ function GoalCard({
             <div>
               <p className="font-semibold text-white/90 text-base leading-tight">{goal.name}</p>
               <p className="text-xs text-white/30 mt-0.5">
-                {(goal.currentAmount ?? 0).toFixed(2)} / {(goal.targetAmount ?? 0).toFixed(2)} XLM
+                {(goal.currentAmount ?? 0).toFixed(2)} / {(goal.targetAmount ?? 0).toFixed(2)} {goalAsset}
               </p>
             </div>
           </div>
@@ -193,19 +207,33 @@ function GoalCard({
                     ✕ Remove link
                   </button>
                 )}
-                {rules.filter(r => r.status === "active").map(r => (
-                  <button
-                    key={r.id}
-                    onClick={() => handleLink(r.id)}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs transition-colors ${
-                      r.id === goal.linkedRuleId
-                        ? "bg-blue-500/10 border border-blue-500/20 text-blue-400"
-                        : "text-white/50 hover:bg-white/[0.05]"
-                    }`}
-                  >
-                    {r.description ?? `${r.action} ${r.amount}${r.isPercentage ? "%" : " XLM"}`}
-                  </button>
-                ))}
+                {rules.filter(r => r.status === "active").map(r => {
+                  const rAsset = ruleAssetOf(r);
+                  // The engine only credits a goal when the executed asset
+                  // matches the goal's, so a mismatched link would silently
+                  // never advance progress. Flag it at link time.
+                  const mismatch = rAsset !== goalAsset;
+                  return (
+                    <button
+                      key={r.id}
+                      onClick={() => handleLink(r.id)}
+                      className={`w-full text-left px-3 py-2.5 rounded-xl text-xs transition-colors ${
+                        r.id === goal.linkedRuleId
+                          ? "bg-blue-500/10 border border-blue-500/20 text-blue-400"
+                          : "text-white/50 hover:bg-white/[0.05]"
+                      }`}
+                    >
+                      <span>
+                        {r.description ?? `${r.action} ${r.amount}${r.isPercentage ? "%" : ` ${rAsset}`}`}
+                      </span>
+                      {mismatch && (
+                        <span className="block text-[10px] text-amber-400/80 mt-0.5">
+                          Moves {rAsset} — won't count toward this {goalAsset} goal
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
                 {rules.filter(r => r.status === "active").length === 0 && (
                   <p className="text-xs text-white/25 px-3 py-2">No active rules to link</p>
                 )}
@@ -231,6 +259,7 @@ function NewGoalSheet({
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
   const [emoji, setEmoji] = useState("🎯");
+  const [asset, setAsset] = useState<"XLM" | "USDC">("XLM");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -243,7 +272,7 @@ function NewGoalSheet({
       const res = await fetch("/api/goals", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), targetAmount: parseFloat(target), emoji }),
+        body: JSON.stringify({ name: name.trim(), targetAmount: parseFloat(target), emoji, asset }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -306,7 +335,26 @@ function NewGoalSheet({
           </div>
 
           <div>
-            <label className="text-xs text-white/40 block mb-1.5">Target amount (XLM)</label>
+            <label className="text-xs text-white/40 block mb-1.5">Denominated in</label>
+            <div className="flex gap-2 mb-4">
+              {(["XLM", "USDC"] as const).map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  onClick={() => setAsset(a)}
+                  className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all border ${
+                    asset === a
+                      ? a === "USDC"
+                        ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+                        : "bg-blue-500/15 border-blue-500/30 text-blue-400"
+                      : "bg-white/[0.04] border-white/[0.06] text-white/35 hover:text-white/60"
+                  }`}
+                >
+                  {a}
+                </button>
+              ))}
+            </div>
+            <label className="text-xs text-white/40 block mb-1.5">Target amount ({asset})</label>
             <input
               type="number" min="1" step="any"
               value={target} onChange={e => setTarget(e.target.value)}

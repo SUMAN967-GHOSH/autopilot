@@ -1,7 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { verifyAuth } from "../middleware/auth";
-import { getDb } from "../lib/db";
-import { buildAiContext, buildRuleContext, computeActivityStats } from "../lib/insights";
+import { normalizeRuleAsset } from "../lib/ruleAsset";
 import Groq from "groq-sdk";
 
 /**
@@ -61,10 +60,9 @@ export default async function chatRoutes(server: FastifyInstance) {
     const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
     const { activity, rules } = await loadUserContext(request.user!.id);
 
-    // The model now decides between two shapes: a rule to create, or a piece of
-    // coaching advice grounded in the figures below. Previously it could only
-    // emit a rule, so any coaching question produced a nonsensical rule.
-    const systemPrompt = `You are AutoPilot, a financial automation assistant for a Stellar wallet.
+    const systemPrompt = `You are a financial automation assistant for a Stellar wallet.
+The user will describe a rule they want to create. Extract the intent and return
+a JSON object representing the rule.
 
 The user's real automation activity (aggregated from their transaction history):
 ${activity}
@@ -79,25 +77,31 @@ Decide which of two things the user is asking for.
   "kind": "rule",
   "trigger": "short phrase for when the rule runs (e.g. 'on every payment received')",
   "action": "save | invest | buffer",
-  "amount": number,
-  "isPercentage": boolean,
-  "description": "short summary of what this rule does",
-  "memo": "short stellar memo, max 28 chars"
+  "amount": number (the value to move),
+  "isPercentage": boolean (true if amount is a %),
+  "asset": "XLM | USDC",
+  "description": "A short summary of what this rule does",
+  "memo": "A short memo for the stellar transaction (max 28 chars)"
 }
 
-2. They are asking for ADVICE, an explanation, or a question about their finances. Return:
-{
-  "kind": "advice",
-  "message": "2-4 sentences of specific advice"
-}
+Asset rules — these matter, the engine routes real funds on them:
+- Two assets are supported: XLM (the native asset) and USDC (the stable asset).
+- Set "asset" to USDC only when the user clearly means USDC (they say "USDC",
+  "dollars", "stablecoin", or "stable"). Otherwise set it to "XLM".
+- The "trigger" MUST name the asset it applies to, because the engine matches
+  incoming payments against the trigger text:
+    * USDC rule  → "on every USDC payment received"
+    * XLM rule   → "on every XLM payment received"
+    * Either     → "on every payment received"   (omit the asset name)
+- Use the asset-agnostic form only when the user genuinely wants the rule to
+  fire on any incoming asset.
+- Never name one asset in "trigger" while setting "asset" to the other.
 
-Rules for advice:
-- Cite the user's actual figures above when they are relevant. Prefer "you automated 128.4 XLM this week" over "you have been saving".
-- If the figures show no history, say so plainly and explain what would make their rules fire.
-- Never invent numbers that do not appear above.
-- Be concrete and brief. No markdown, no bullet lists, no preamble.
-
-Return ONLY valid JSON, no markdown formatting.`;
+Examples:
+"save 10% of every payment"        → trigger "on every payment received",      asset "XLM"
+"save 20 USDC from my salary"      → trigger "on every USDC payment received", asset "USDC"
+"invest 5% of incoming XLM"        → trigger "on every XLM payment received",  asset "XLM"
+"put 50 dollars aside each month"  → trigger "monthly",                        asset "USDC"`;
 
     try {
       const completion = await groq.chat.completions.create({
@@ -117,19 +121,16 @@ Return ONLY valid JSON, no markdown formatting.`;
 
       const parsed = JSON.parse(responseText);
 
-      // Advice path: return prose for the client to render as a chat bubble.
-      if (parsed?.kind === "advice" || (parsed?.message && !parsed?.action)) {
-        const text = String(parsed.message ?? "").trim();
-        if (!text) throw new Error("Empty advice response");
-        return reply.send({ message: text });
+      // The model can emit an asset that contradicts its own trigger text.
+      // Reconcile them here so the matcher and the executor agree.
+      const { asset, trigger, corrected } = normalizeRuleAsset(parsed);
+      if (corrected) {
+        console.warn(
+          `[Chat] Reconciled rule asset → ${asset} (trigger: "${trigger}", model said "${parsed.asset}")`,
+        );
       }
 
-      // Rule path: strip the discriminator so the stored shape is unchanged
-      // from before this route learned to give advice.
-      const { kind, ...rule } = parsed;
-      if (!rule?.action) throw new Error("AI response contained neither advice nor a rule");
-
-      return reply.send({ rule });
+      return reply.send({ rule: { ...parsed, asset, trigger } });
     } catch (err: any) {
       console.error("AI Error:", err);
       return reply.status(500).send({ error: "Failed to parse rule intent via AI." });
