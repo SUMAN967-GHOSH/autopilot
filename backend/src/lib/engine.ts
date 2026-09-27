@@ -9,14 +9,14 @@
 
 import { Keypair } from "@stellar/stellar-sdk";
 import { sendXLM, sendUSDC } from "../stellar/transaction";
+import { getEngineSecret } from "./secrets";
 
 export { fetchRecentPayments } from "../stellar/horizon";
 export { loadKeypairFromBlob } from "../stellar/keypair";
 
 /** Engine server keypair — signs all automated transactions */
-export function getEngineKeypair(): typeof Keypair.prototype {
-  const secret = process.env.AUTOPILOT_SECRET_KEY;
-  if (!secret) throw new Error("AUTOPILOT_SECRET_KEY not set in environment");
+export async function getEngineKeypair(): Promise<typeof Keypair.prototype> {
+  const secret = await getEngineSecret();
   return Keypair.fromSecret(secret);
 }
 
@@ -34,7 +34,7 @@ export async function executeRuleTransaction(
   memoText: string,
   asset: "XLM" | "USDC" = "XLM"
 ): Promise<string> {
-  const engine = getEngineKeypair();
+  const engine = await getEngineKeypair();
   return asset === "USDC"
     ? sendUSDC(engine, destinationId, amount, memoText)
     : sendXLM(engine, destinationId, amount, memoText);

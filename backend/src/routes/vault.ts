@@ -24,6 +24,7 @@ import {
   VaultType,
 } from "../stellar/vault";
 import { explorerUrl, NETWORK_LABEL } from "../config/network";
+import { buildPage, parsePagination } from "../lib/pagination";
 
 const VALID_TYPES: VaultType[] = ["savings", "investment"];
 
@@ -34,13 +35,28 @@ export default async function vaultRoutes(server: FastifyInstance) {
 
   server.get("/", async (request, reply) => {
     const sql = getDb();
-    const vaults = await sql`
-      SELECT id, type, "publicKey", "xlmBalance", "usdcBalance", "fundTxHash", "createdAt"
-      FROM "Vault"
-      WHERE "userId" = ${request.user.id}::uuid
-      ORDER BY "createdAt" ASC
-    `;
-    return reply.send(vaults);
+    const pagination = parsePagination(request.query as any, { defaultLimit: 20, maxLimit: 50 });
+    if (!pagination.ok) return reply.status(400).send({ error: pagination.error });
+
+    const vaults = pagination.cursor
+      ? await sql`
+          SELECT id, type, "publicKey", "xlmBalance", "usdcBalance", "fundTxHash", "createdAt"
+          FROM "Vault"
+          WHERE "userId" = ${request.user.id}::uuid
+            AND ("createdAt", id) < (${pagination.cursor.createdAt}::timestamptz, ${pagination.cursor.id}::uuid)
+          ORDER BY "createdAt" DESC, id DESC
+          LIMIT ${pagination.limit + 1}
+        `
+      : await sql`
+          SELECT id, type, "publicKey", "xlmBalance", "usdcBalance", "fundTxHash", "createdAt"
+          FROM "Vault"
+          WHERE "userId" = ${request.user.id}::uuid
+          ORDER BY "createdAt" DESC, id DESC
+          LIMIT ${pagination.limit + 1}
+          OFFSET ${pagination.offset}
+        `;
+    const page = buildPage(vaults as any[], pagination);
+    return reply.send({ vaults: page.items, pagination: page.pagination });
   });
 
   // ── Create a vault ────────────────────────────────────────────────────

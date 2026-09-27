@@ -17,6 +17,9 @@ import cron, { ScheduledTask } from "node-cron";
 import { getDb } from "../lib/db";
 import { getCronQueue, CronJobData } from "./queue";
 import { ruleAsset } from "./processor";
+import { readConfiguredLimit } from "../lib/pagination";
+
+const DEFAULT_MAX_RULES_PER_USER = 20;
 
 const activeCronJobs = new Map<string, ScheduledTask>(); // ruleId → cron task
 
@@ -100,13 +103,20 @@ function registerCronRule(rule: {
 
 async function syncCronSchedules() {
   const sql = getDb();
+  const maxRules = readConfiguredLimit("MAX_RULES_PER_USER", DEFAULT_MAX_RULES_PER_USER);
 
   try {
     const rules = await sql`
+      WITH ranked_rules AS (
+        SELECT r.*,
+               ROW_NUMBER() OVER (PARTITION BY r."userId" ORDER BY r."createdAt" ASC, r.id ASC) AS rank
+        FROM "Rule" r
+        WHERE r.status = 'active'
+      )
       SELECT r.*, u.id AS "userId", u."publicKey"
-      FROM "Rule" r
+      FROM ranked_rules r
       INNER JOIN "User" u ON u.id = r."userId"
-      WHERE r.status = 'active'
+      WHERE r.rank <= ${maxRules}
     `;
 
     const activeIds = new Set<string>();

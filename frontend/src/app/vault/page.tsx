@@ -452,7 +452,10 @@ export default function VaultPage() {
     setLoading(true);
     try {
       const res = await fetch("/api/vault", { credentials: "include" });
-      if (res.ok) setVaults(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        setVaults(Array.isArray(data) ? data : (data.vaults ?? []));
+      }
     } catch {}
     setLoading(false);
   }, []);

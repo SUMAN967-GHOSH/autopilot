@@ -19,6 +19,9 @@ import { getDb } from "../lib/db";
 import { executeRuleTransaction } from "../lib/engine";
 import { checkSpendingLimit, recordSpend } from "./limitGuard";
 import { PAYMENT_QUEUE_NAME, PaymentJobData, CronJobData, CRON_QUEUE_NAME, getConnectionOptions } from "./queue";
+import { readConfiguredLimit } from "../lib/pagination";
+
+const DEFAULT_MAX_RULES_PER_USER = 20;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -96,6 +99,7 @@ export function doesPaymentMatchTrigger(trigger: string, asset: string): boolean
 export async function processPaymentDirect(data: PaymentJobData): Promise<any> {
   const { userId, publicKey, paymentHorizonId, amount, asset } = data;
   const sql = getDb();
+  const maxRules = readConfiguredLimit("MAX_RULES_PER_USER", DEFAULT_MAX_RULES_PER_USER);
 
   console.log(`[Processor] ⚡ Processing ${amount} ${asset} for ${publicKey.slice(0, 8)}…`);
 
@@ -117,6 +121,7 @@ export async function processPaymentDirect(data: PaymentJobData): Promise<any> {
       SELECT * FROM "Rule"
       WHERE "userId" = ${userId}::uuid AND status = 'active'
       ORDER BY "createdAt" ASC
+      LIMIT ${maxRules}
     `,
   ]);
 
@@ -151,14 +156,22 @@ export async function processPaymentDirect(data: PaymentJobData): Promise<any> {
     console.log(`[Processor] 🔍 Rule "${rule.trigger}" | matches: ${triggerMatches}`);
     if (!triggerMatches) continue;
 
-    const execAmount = (rule.isPercentage as boolean)
-      ? (parseFloat(rule.amount) / 100) * paymentAmount
-      : parseFloat(rule.amount);
+    const paymentStroops = Math.round(paymentAmount * 10000000);
+    const ruleAmountFloat = parseFloat(rule.amount);
+
+    let execStroops: number;
+    if (rule.isPercentage) {
+      execStroops = Math.round((paymentStroops * ruleAmountFloat) / 100);
+    } else {
+      execStroops = Math.round(ruleAmountFloat * 10000000);
+    }
+
+    const execAmount = execStroops / 10000000;
 
     console.log(`[Processor] 💰 Exec: ${execAmount} ${assetCode} (${rule.isPercentage ? `${rule.amount}%` : "flat"} of ${paymentAmount})`);
 
-    if (execAmount <= 0.0000001) { console.log("[Processor] ⚠ Amount too small — skipping"); continue; }
-    if (execAmount > paymentAmount) {
+    if (execStroops <= 0) { console.log("[Processor] ⚠ Amount too small — skipping"); continue; }
+    if (execStroops > paymentStroops) {
       console.log(`[Processor] ⚠ Rule amount ${execAmount} > payment ${paymentAmount} — skipping`);
       continue;
     }
@@ -200,13 +213,21 @@ export async function processPaymentDirect(data: PaymentJobData): Promise<any> {
       // assetCode is non-null here — doesPaymentMatchTrigger() rejects unsupported assets.
       const txHash = await executeRuleTransaction(destination, execAmountStr, memo, assetCode!);
 
-      await sql`
-        INSERT INTO "AutomatedTransaction"
-          (id, "userId", "ruleId", amount, type, asset, memo, "txHash", "createdAt")
-        VALUES
-          (gen_random_uuid(), ${userId}::uuid, ${rule.id}::uuid,
-           ${execAmount}, ${action}, ${assetCode}, ${memo}, ${txHash}, NOW())
-      `;
+      try {
+        await sql`
+          INSERT INTO "AutomatedTransaction"
+            (id, "userId", "ruleId", amount, type, asset, memo, "txHash", "createdAt")
+          VALUES
+            (gen_random_uuid(), ${userId}::uuid, ${rule.id}::uuid,
+             ${execAmount}, ${action}, ${assetCode}, ${memo}, ${txHash}, NOW())
+        `;
+      } catch (insertErr: any) {
+        if (insertErr.code === '23505' || (insertErr.message && insertErr.message.includes('AutomatedTransaction_txHash_key'))) {
+          console.log(`[Processor] ⏭ Duplicate txHash ${txHash} detected — skipping as it was already processed by another worker`);
+          continue;
+        }
+        throw insertErr;
+      }
 
       // ── Step 8: Increment linked Goal's currentAmount ──────────────
       // Only credit goals denominated in the asset that just moved: adding
@@ -281,13 +302,21 @@ async function processCronJob(job: Job<CronJobData>) {
 
   try {
     const txHash = await executeRuleTransaction(destination, execAmountStr, memoText, cronAsset);
-    await sql`
-      INSERT INTO "AutomatedTransaction"
-        (id, "userId", "ruleId", amount, type, asset, memo, "txHash", "createdAt")
-      VALUES
-        (gen_random_uuid(), ${userId}::uuid, ${ruleId}::uuid,
-         ${execAmount}, ${action.toLowerCase()}, ${cronAsset}, ${memoText}, ${txHash}, NOW())
-    `;
+    try {
+      await sql`
+        INSERT INTO "AutomatedTransaction"
+          (id, "userId", "ruleId", amount, type, asset, memo, "txHash", "createdAt")
+        VALUES
+          (gen_random_uuid(), ${userId}::uuid, ${ruleId}::uuid,
+           ${execAmount}, ${action.toLowerCase()}, ${cronAsset}, ${memoText}, ${txHash}, NOW())
+      `;
+    } catch (insertErr: any) {
+      if (insertErr.code === '23505' || (insertErr.message && insertErr.message.includes('AutomatedTransaction_txHash_key'))) {
+        console.log(`[Processor] ⏭ Duplicate cron txHash ${txHash} detected — skipping`);
+        return { status: "skipped", reason: "duplicate_txHash" };
+      }
+      throw insertErr;
+    }
     try { await recordSpend(userId, execAmount); } catch {}
     console.log(`[Processor] ✅ Cron rule "${action}" | ${execAmountStr} ${cronAsset} | tx: ${txHash.slice(0, 20)}…`);
     return { status: "executed", txHash, amount: execAmountStr };
