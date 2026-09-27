@@ -27,8 +27,12 @@ export default async function accountRoutes(server: FastifyInstance) {
       return reply.status(401).send({ error: "User not found. Please sign in again." });
     }
 
+    // Update lastSeen async
+    sql`UPDATE "User" SET "lastSeen" = NOW() WHERE id = ${request.user!.id}::uuid`.catch(console.error);
+
     return reply.send({
       publicKey: u.publicKey,
+      lastSeen: u.lastSeen,
       dailyLimit: u.dailyLimit ?? null,
       weeklyLimit: u.weeklyLimit ?? null,
       plan: u.plan ?? "free",

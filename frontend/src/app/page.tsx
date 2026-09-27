@@ -128,6 +128,7 @@ export default function DashboardPage() {
   const [isUnfunded, setIsUnfunded] = useState(false);
   const [txRows, setTxRows] = useState<any[]>([]);
   const [activeRules, setActiveRules] = useState(0);
+  const [lastSeen, setLastSeen] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadDashboard() {
@@ -163,6 +164,7 @@ export default function DashboardPage() {
 
         const userPublicKey = account.publicKey ?? "";
         setPublicKey(userPublicKey);
+        if (account.lastSeen) setLastSeen(account.lastSeen);
         setActiveRules(account.activeRules ?? (Array.isArray(rulesData) ? rulesData.length : 0));
         setTxRows(Array.isArray(txData) ? txData.slice(0, 10) : []);
 
@@ -259,6 +261,22 @@ export default function DashboardPage() {
   return (
     <DashboardShell publicKey={publicKey}>
       <div className="px-4 py-6 md:px-6 md:py-8 max-w-5xl mx-auto w-full">
+        {/* Notification Banner */}
+        {lastSeen && txRows.filter((tx: any) => new Date(tx.createdAt) > new Date(lastSeen)).length > 0 && (
+          <div className="mb-6 bg-blue-500/10 border border-blue-500/20 rounded-2xl p-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center">
+                <Sparkles className="w-4 h-4 text-blue-400" />
+              </div>
+              <div>
+                <p className="text-sm text-white font-medium">Recent Automation Activity!</p>
+                <p className="text-xs text-blue-200">{txRows.filter((tx: any) => new Date(tx.createdAt) > new Date(lastSeen)).length} automated transaction(s) ran since your last visit.</p>
+              </div>
+            </div>
+            <button onClick={() => setLastSeen(new Date().toISOString())} className="text-xs font-medium text-blue-400 hover:text-blue-300">Dismiss</button>
+          </div>
+        )}
+
         {/* Header */}
         <div className="mb-8">
           <p className="text-white/30 text-sm mb-1 flex items-center gap-1.5">
