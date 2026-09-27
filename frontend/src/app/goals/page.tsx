@@ -20,6 +20,7 @@ export default async function GoalsPage() {
       JOIN   "User" u ON g."userId" = u.id
       WHERE  u."publicKey" = ${session.publicKey}
       ORDER  BY g."createdAt" DESC
+      LIMIT  50
     `.catch(() => []),
     sql`
       SELECT r.id, r.description, r.action, r.trigger, r.memo,
@@ -28,6 +29,7 @@ export default async function GoalsPage() {
       JOIN   "User" u ON r."userId" = u.id
       WHERE  u."publicKey" = ${session.publicKey}
       ORDER  BY r."createdAt" DESC
+      LIMIT  20
     `.catch(() => []),
   ]);
 

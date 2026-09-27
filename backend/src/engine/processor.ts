@@ -19,6 +19,9 @@ import { getDb } from "../lib/db";
 import { executeRuleTransaction } from "../lib/engine";
 import { checkSpendingLimit, recordSpend } from "./limitGuard";
 import { PAYMENT_QUEUE_NAME, PaymentJobData, CronJobData, CRON_QUEUE_NAME, getConnectionOptions } from "./queue";
+import { readConfiguredLimit } from "../lib/pagination";
+
+const DEFAULT_MAX_RULES_PER_USER = 20;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -96,6 +99,7 @@ export function doesPaymentMatchTrigger(trigger: string, asset: string): boolean
 export async function processPaymentDirect(data: PaymentJobData): Promise<any> {
   const { userId, publicKey, paymentHorizonId, amount, asset } = data;
   const sql = getDb();
+  const maxRules = readConfiguredLimit("MAX_RULES_PER_USER", DEFAULT_MAX_RULES_PER_USER);
 
   console.log(`[Processor] ⚡ Processing ${amount} ${asset} for ${publicKey.slice(0, 8)}…`);
 
@@ -117,6 +121,7 @@ export async function processPaymentDirect(data: PaymentJobData): Promise<any> {
       SELECT * FROM "Rule"
       WHERE "userId" = ${userId}::uuid AND status = 'active'
       ORDER BY "createdAt" ASC
+      LIMIT ${maxRules}
     `,
   ]);
 

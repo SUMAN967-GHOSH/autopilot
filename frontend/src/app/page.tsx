@@ -133,10 +133,9 @@ export default function DashboardPage() {
     async function loadDashboard() {
       try {
         // Try to load account (if cookie is not set → redirect to onboarding)
-        const [accountRes, txRes, rulesRes] = await Promise.all([
-          fetch("/api/account"),
-          fetch("/api/transactions"),
-          fetch("/api/rules"),
+        const [accountRes, txRes] = await Promise.all([
+          fetch("/api/account?limit=10"),
+          fetch("/api/transactions?limit=10"),
         ]);
 
         if (accountRes.status === 401) {
@@ -152,7 +151,6 @@ export default function DashboardPage() {
 
         const account  = await safeJson(accountRes);
         const txData   = await safeJson(txRes);
-        const rulesData = await safeJson(rulesRes);
 
         if (!account) {
           // Not logged in or backend error — stop loading so the dashboard
@@ -163,8 +161,9 @@ export default function DashboardPage() {
 
         const userPublicKey = account.publicKey ?? "";
         setPublicKey(userPublicKey);
-        setActiveRules(account.activeRules ?? (Array.isArray(rulesData) ? rulesData.length : 0));
-        setTxRows(Array.isArray(txData) ? txData.slice(0, 10) : []);
+        setActiveRules(account.activeRules ?? 0);
+        const transactions = Array.isArray(txData) ? txData : (txData?.transactions ?? []);
+        setTxRows(transactions);
 
         // Fetch the USER's own live Stellar balance from Horizon
         if (userPublicKey) {
