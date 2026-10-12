@@ -38,7 +38,7 @@ function decodePayload(token: string): { iat: number; exp: number; id: string; p
 }
 
 function signChallenge(message: string, keypair = TEST_KEYPAIR): string {
-  return keypair.sign(hashStellarSignedMessage(message)).toString("base64");
+  return Buffer.from(keypair.sign(hashStellarSignedMessage(message))).toString("base64");
 }
 
 describe("AutoPilot signed wallet authentication", () => {
