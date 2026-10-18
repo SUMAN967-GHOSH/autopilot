@@ -14,6 +14,7 @@
 import { startWorkers } from "./processor";
 import { startHorizonStreams } from "./horizonStream";
 import { startScheduler } from "./scheduler";
+import { startSorobanEventListener } from "./sorobanEvents";
 
 export async function startEngine() {
   const hasRedis = !!process.env.REDIS_URL;
@@ -47,6 +48,14 @@ export async function startEngine() {
     cleanupFns.push(stopStreams);
   } catch (err: any) {
     console.error("[Engine] ✗ Failed to start Horizon streams:", err.message);
+  }
+
+  // ── Start Soroban contract event poller
+  try {
+    const stopSoroban = await startSorobanEventListener();
+    cleanupFns.push(stopSoroban);
+  } catch (err: any) {
+    console.error("[Engine] ✗ Failed to start Soroban event poller:", err.message);
   }
 
   // ── Start cron scheduler (requires Redis for queuing)

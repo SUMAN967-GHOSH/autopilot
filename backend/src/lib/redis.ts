@@ -62,6 +62,24 @@ export async function getHorizonCursor(publicKey: string): Promise<string | null
 }
 
 /**
+ * Store the latest synced Soroban ledger sequence.
+ * Used by the Soroban event poller to resume after restarts.
+ */
+export async function saveSorobanLedger(key: string, ledger: number): Promise<void> {
+  const redis = getRedis();
+  if (!redis) return;
+  await redis.set(`soroban:ledger:${key}`, ledger.toString(), { ex: 60 * 60 * 24 * 7 });
+}
+
+export async function getSorobanLedger(key: string): Promise<number | null> {
+  const redis = getRedis();
+  if (!redis) return null;
+  const val = await redis.get<string | number>(`soroban:ledger:${key}`);
+  if (val === null || val === undefined) return null;
+  return typeof val === "number" ? val : parseInt(val, 10);
+}
+
+/**
  * Check if Redis is actively configured
  */
 export function isRedisAvailable(): boolean {
