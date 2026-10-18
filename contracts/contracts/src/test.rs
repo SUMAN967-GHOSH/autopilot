@@ -448,3 +448,160 @@ fn test_engine_execute_emits_event() {
         ]
     );
 }
+
+const VAULT_WASM: &[u8] = include_bytes!("../test_fixtures/autopilot_vault.wasm");
+
+#[test]
+fn test_factory_initialize() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let wasm_hash = env.deployer().upload_contract_wasm(VAULT_WASM);
+    let factory_id = env.register_contract(None, factory::VaultFactory);
+    let factory_client = factory::VaultFactoryClient::new(&env, &factory_id);
+
+    let admin = Address::generate(&env);
+    let engine = Address::generate(&env);
+
+    factory_client.init(&admin, &engine, &wasm_hash);
+
+    assert_eq!(factory_client.get_admin(), admin);
+    assert_eq!(factory_client.get_factory_engine(), engine);
+    assert_eq!(factory_client.get_wasm_hash(), wasm_hash);
+}
+
+#[test]
+#[should_panic(expected = "Factory already initialized")]
+fn test_factory_initialize_already_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let wasm_hash = env.deployer().upload_contract_wasm(VAULT_WASM);
+    let factory_id = env.register_contract(None, factory::VaultFactory);
+    let factory_client = factory::VaultFactoryClient::new(&env, &factory_id);
+
+    let admin = Address::generate(&env);
+    let engine = Address::generate(&env);
+
+    factory_client.init(&admin, &engine, &wasm_hash);
+    factory_client.init(&admin, &engine, &wasm_hash);
+}
+
+#[test]
+fn test_factory_set_engine_and_wasm_hash() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let wasm_hash = env.deployer().upload_contract_wasm(VAULT_WASM);
+    let factory_id = env.register_contract(None, factory::VaultFactory);
+    let factory_client = factory::VaultFactoryClient::new(&env, &factory_id);
+
+    let admin = Address::generate(&env);
+    let engine = Address::generate(&env);
+
+    factory_client.init(&admin, &engine, &wasm_hash);
+
+    let new_engine = Address::generate(&env);
+    factory_client.set_factory_engine(&new_engine);
+    assert_eq!(factory_client.get_factory_engine(), new_engine);
+
+    let new_wasm_hash = env.deployer().upload_contract_wasm(VAULT_WASM);
+    factory_client.set_wasm_hash(&new_wasm_hash);
+    assert_eq!(factory_client.get_wasm_hash(), new_wasm_hash);
+}
+
+#[test]
+fn test_factory_deploy_vault_and_registry() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let wasm_hash = env.deployer().upload_contract_wasm(VAULT_WASM);
+    let factory_id = env.register_contract(None, factory::VaultFactory);
+    let factory_client = factory::VaultFactoryClient::new(&env, &factory_id);
+
+    let admin = Address::generate(&env);
+    let engine = Address::generate(&env);
+
+    factory_client.init(&admin, &engine, &wasm_hash);
+
+    let owner = Address::generate(&env);
+    let savings_symbol = symbol_short!("savings");
+    let invest_symbol = symbol_short!("invest");
+
+    // Initially, no vaults for owner
+    assert_eq!(factory_client.get_vault(&owner, &savings_symbol), None);
+    assert_eq!(factory_client.get_user_vaults(&owner).len(), 0);
+
+    // Deploy savings vault
+    let savings_vault = factory_client.deploy_vault(&owner, &savings_symbol);
+    assert_eq!(
+        factory_client.get_vault(&owner, &savings_symbol),
+        Some(savings_vault.clone())
+    );
+
+    // Verify deployed vault initialization
+    let vault_client = AutopilotVaultClient::new(&env, &savings_vault);
+    assert_eq!(vault_client.get_owner(), owner);
+    assert_eq!(vault_client.get_engine(), engine);
+
+    // Deploy investment vault
+    let invest_vault = factory_client.deploy_vault(&owner, &invest_symbol);
+    assert_eq!(
+        factory_client.get_vault(&owner, &invest_symbol),
+        Some(invest_vault.clone())
+    );
+
+    // Verify user vaults list
+    let user_vaults = factory_client.get_user_vaults(&owner);
+    assert_eq!(user_vaults.len(), 2);
+    assert_eq!(user_vaults.get(0).unwrap(), savings_vault);
+    assert_eq!(user_vaults.get(1).unwrap(), invest_vault);
+}
+
+
+#[test]
+#[should_panic(expected = "Vault already exists for this owner and type")]
+fn test_factory_duplicate_vault_type_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let wasm_hash = env.deployer().upload_contract_wasm(VAULT_WASM);
+    let factory_id = env.register_contract(None, factory::VaultFactory);
+    let factory_client = factory::VaultFactoryClient::new(&env, &factory_id);
+
+    let admin = Address::generate(&env);
+    let engine = Address::generate(&env);
+
+    factory_client.init(&admin, &engine, &wasm_hash);
+
+    let owner = Address::generate(&env);
+    let savings_symbol = symbol_short!("savings");
+
+    factory_client.deploy_vault(&owner, &savings_symbol);
+    // Second deployment of same type for same owner must panic
+    factory_client.deploy_vault(&owner, &savings_symbol);
+}
+
+#[test]
+#[should_panic]
+fn test_factory_deploy_without_auth_panics() {
+    let env = Env::default();
+
+    let wasm_hash = env.deployer().upload_contract_wasm(VAULT_WASM);
+    let factory_id = env.register_contract(None, factory::VaultFactory);
+    let factory_client = factory::VaultFactoryClient::new(&env, &factory_id);
+
+    let admin = Address::generate(&env);
+    let engine = Address::generate(&env);
+
+    env.mock_all_auths();
+    factory_client.init(&admin, &engine, &wasm_hash);
+
+    let owner = Address::generate(&env);
+    let savings_symbol = symbol_short!("savings");
+
+    env.set_auths(&[]);
+    factory_client.deploy_vault(&owner, &savings_symbol);
+}
+
+
