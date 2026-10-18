@@ -256,10 +256,33 @@ async function processCronJob(job: Job<CronJobData>): Promise<ProcessCronResult>
   const execAmount = amount;
   if (execAmount <= 0) return { skipped: true, reason: "zero_amount" };
 
-  const userRows = await sql`
-    SELECT id, "dailyLimit", "weeklyLimit" FROM "User" WHERE id = ${userId}::uuid LIMIT 1
-  `;
+  const [userRows, vaults] = await Promise.all([
+    sql`
+      SELECT id, "dailyLimit", "weeklyLimit" FROM "User" WHERE id = ${userId}::uuid LIMIT 1
+    `,
+    sql`
+      SELECT type, "publicKey" FROM "Vault"
+      WHERE "userId" = ${userId}::uuid
+    `,
+  ]);
   if (userRows.length === 0) return { skipped: true, reason: "user_not_found" };
+
+  const savingsVault = vaults.find((v: any) => v.type === "savings");
+  const investVault  = vaults.find((v: any) => v.type === "investment");
+
+  const actionLower = (action ?? "").toLowerCase();
+  let destination: string | null = null;
+
+  if (actionLower.includes("save") || actionLower.includes("saving")) {
+    destination = savingsVault?.publicKey ?? null;
+  } else if (actionLower.includes("invest") || actionLower.includes("investment")) {
+    destination = investVault?.publicKey ?? null;
+  }
+
+  if (!destination) {
+    console.warn(`[Processor] ⚠ No ${action} vault found for cron rule ${ruleId} — user must create one in the Vault tab`);
+    return { status: "failed", error: "No vault found — create one in the Vault tab" };
+  }
 
   const user = userRows[0];
   let limitReserved = false;
@@ -280,7 +303,6 @@ async function processCronJob(job: Job<CronJobData>): Promise<ProcessCronResult>
     return { status: "blocked", reason: `Spending limit verification error: ${limitErr?.message}` };
   }
 
-  const destination = process.env.AUTOPILOT_PUBLIC_KEY!;
   const memoText = (memo ?? `AutoPilot:${action}:${execAmount}`).slice(0, 28);
   const execAmountStr = execAmount.toFixed(7);
   // Scheduled rules carry their own asset (there is no incoming payment to
@@ -304,11 +326,28 @@ async function processCronJob(job: Job<CronJobData>): Promise<ProcessCronResult>
       }
       throw insertErr;
     }
+
+    // Step: Increment linked Goal's currentAmount (if any)
+    try {
+      await sql`
+        UPDATE "Goal"
+        SET
+          "currentAmount" = "currentAmount" + ${execAmount},
+          "updatedAt" = NOW()
+        WHERE "linkedRuleId" = ${ruleId}::uuid
+          AND "userId" = ${userId}::uuid
+          AND asset = ${cronAsset}
+          AND "currentAmount" < "targetAmount"
+      `;
+    } catch (goalErr: any) {
+      console.warn(`[Processor] ⚠ Could not update goal for cron rule ${ruleId}:`, goalErr?.message);
+    }
+
     if (!limitReserved) {
       try { await recordSpend(userId, execAmount); } catch {}
     }
-    console.log(`[Processor] ✅ Cron rule "${action}" | ${execAmountStr} ${cronAsset} | tx: ${txHash.slice(0, 20)}…`);
-    return { status: "executed", txHash, amount: execAmountStr };
+    console.log(`[Processor] ✅ Cron rule "${action}" | ${execAmountStr} ${cronAsset} → vault | tx: ${txHash.slice(0, 20)}…`);
+    return { status: "executed", txHash, amount: execAmountStr, destination };
   } catch (err: any) {
     if (limitReserved) {
       await rollbackSpend(userId, execAmount).catch((rbErr) =>
@@ -319,6 +358,7 @@ async function processCronJob(job: Job<CronJobData>): Promise<ProcessCronResult>
     throw err;
   }
 }
+
 
 // ── Start workers ─────────────────────────────────────────────────────────
 

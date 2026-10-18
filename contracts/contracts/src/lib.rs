@@ -165,5 +165,8 @@ impl AutopilotVault {
     }
 }
 
+pub mod factory;
+
 #[cfg(test)]
 mod test;
+
